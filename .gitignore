@@ -1,5 +1,6 @@
 # Binaries
 azdo-tui
+azuredevops-terminal-dashboard
 *.exe
 *.dll
 *.so
