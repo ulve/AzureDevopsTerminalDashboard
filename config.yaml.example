@@ -1,0 +1,11 @@
+# Azure DevOps Terminal Dashboard Configuration
+# Copy this file to ~/.config/azdo-tui/config.yaml and fill in your details
+
+organization: your-organization-name
+project: your-project-name
+pat: your-personal-access-token
+
+# Note: You can also use environment variables instead:
+# export AZDO_ORG=your-organization-name
+# export AZDO_PROJECT=your-project-name
+# export AZDO_PAT=your-personal-access-token
