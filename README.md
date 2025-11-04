@@ -146,15 +146,35 @@ The dashboard has three main views:
 
 ## Keyboard Shortcuts
 
+### Pipeline List View
 | Key | Action |
 |-----|--------|
-| `q` or `Ctrl+C` | Quit the application |
-| `Tab` | Switch between Pull Requests and Builds tabs (Dashboard view) |
-| `↑/↓` | Navigate up/down in lists |
-| `Enter` | Select item / View details |
-| `Esc` | Go back to previous view |
-| `r` | Manually refresh data |
-| `PgUp/PgDn` | Scroll in diff view |
+| `↑/k` | Move up |
+| `↓/j` | Move down |
+| `Enter` | View pipeline details |
+| `r` | Refresh pipeline list |
+| `q` | Quit |
+
+### Pipeline Detail View
+| Key | Action |
+|-----|--------|
+| `↑/↓` | Scroll up/down |
+| `PgUp/PgDn` | Page up/down |
+| `Esc` | Back to pipeline list |
+| `r` | Refresh pipeline details |
+| `q` | Quit |
+
+## Pipeline Progress & Logs
+
+When you select a pipeline (press Enter), you'll see:
+
+- **Pipeline Status**: Current status (InProgress, Succeeded, Failed, etc.)
+- **Branch & User Info**: Source branch and who requested the build
+- **Duration**: How long the pipeline has been running
+- **Stages & Jobs**: Real-time progress of each stage and job
+- **Recent Logs**: Last 50 lines of pipeline logs
+
+The view auto-refreshes every 10 seconds to show live progress updates.
 
 ## Development
 

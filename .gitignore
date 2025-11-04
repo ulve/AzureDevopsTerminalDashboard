@@ -1,34 +1,25 @@
-# Binaries for programs and plugins
+# Binaries
+azdo-tui
 *.exe
-*.exe~
 *.dll
 *.so
 *.dylib
-adtd
-azdo-tui
 
-# Test binary, built with `go test -c`
+# Test binary
 *.test
 
 # Output of the go coverage tool
 *.out
 
-# Dependency directories
-vendor/
-
 # Go workspace file
 go.work
 
-# Config files (contains sensitive data)
-.adtd.json
-
-# IDE specific files
-.idea/
+# IDE
 .vscode/
+.idea/
 *.swp
 *.swo
-*~
 
-# OS specific files
-.DS_Store
-Thumbs.db
+# Config with sensitive data
+config.yaml
+.env
