@@ -1,0 +1,24 @@
+{
+  "organization": "your-organization-name",
+  "pullRequests": [
+    {
+      "project": "MyProject",
+      "repository": "MyRepo"
+    },
+    {
+      "project": "AnotherProject",
+      "repository": "AnotherRepo"
+    }
+  ],
+  "pipelines": [
+    {
+      "project": "MyProject",
+      "pipeline": "MyPipeline"
+    },
+    {
+      "project": "AnotherProject",
+      "pipeline": "CI-Pipeline"
+    }
+  ],
+  "refreshInterval": 30
+}
