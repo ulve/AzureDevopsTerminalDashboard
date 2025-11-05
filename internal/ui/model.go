@@ -20,6 +20,7 @@ const (
 	ViewDashboard View = iota
 	ViewPRFiles
 	ViewFileDiff
+	ViewBuildLogs
 )
 
 // Model represents the application state
@@ -33,9 +34,12 @@ type Model struct {
 	buildList       list.Model
 	fileList        list.Model
 	diffViewport    viewport.Model
+	logsViewport    viewport.Model
 	selectedPR      *azuredevops.PullRequest
+	selectedBuild   *azuredevops.Build
 	prFiles         []string
 	currentDiff     string
+	buildLogs       string
 	loading         bool
 	err             error
 	lastUpdate      time.Time
@@ -68,6 +72,12 @@ type DiffLoadedMsg struct {
 	err  error
 }
 
+// LogsLoadedMsg represents loaded build logs
+type LogsLoadedMsg struct {
+	logs string
+	err  error
+}
+
 // NewModel creates a new application model
 func NewModel(cfg *config.Config, client *azuredevops.Client) Model {
 	// Create PR list
@@ -94,6 +104,9 @@ func NewModel(cfg *config.Config, client *azuredevops.Client) Model {
 	// Create diff viewport
 	diffViewport := viewport.New(0, 0)
 
+	// Create logs viewport
+	logsViewport := viewport.New(0, 0)
+
 	return Model{
 		config:          cfg,
 		client:          client,
@@ -102,6 +115,7 @@ func NewModel(cfg *config.Config, client *azuredevops.Client) Model {
 		buildList:       buildList,
 		fileList:        fileList,
 		diffViewport:    diffViewport,
+		logsViewport:    logsViewport,
 		loading:         true,
 		autoRefresh:     true,
 		refreshInterval: time.Duration(cfg.RefreshInterval) * time.Second,
@@ -153,6 +167,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.view = ViewDashboard
 			case ViewFileDiff:
 				m.view = ViewPRFiles
+			case ViewBuildLogs:
+				m.view = ViewDashboard
 			}
 		}
 
@@ -190,6 +206,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.diffViewport.SetContent(msg.diff)
 			m.view = ViewFileDiff
 		}
+
+	case LogsLoadedMsg:
+		if msg.err != nil {
+			m.err = msg.err
+		} else {
+			m.buildLogs = msg.logs
+			m.logsViewport.SetContent(msg.logs)
+			m.view = ViewBuildLogs
+		}
 	}
 
 	// Update active component based on view
@@ -205,6 +230,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.fileList, cmd = m.fileList.Update(msg)
 	case ViewFileDiff:
 		m.diffViewport, cmd = m.diffViewport.Update(msg)
+	case ViewBuildLogs:
+		m.logsViewport, cmd = m.logsViewport.Update(msg)
 	}
 	cmds = append(cmds, cmd)
 
@@ -224,6 +251,8 @@ func (m Model) View() string {
 		return m.renderPRFiles()
 	case ViewFileDiff:
 		return m.renderFileDiff()
+	case ViewBuildLogs:
+		return m.renderBuildLogs()
 	}
 
 	return ""
@@ -285,7 +314,7 @@ func (m Model) renderDashboard() string {
 	}
 
 	// Status bar
-	status := fmt.Sprintf("Last update: %s | Auto-refresh: %v | Press 'r' to refresh, 'tab' to switch, 'q' to quit",
+	status := fmt.Sprintf("Last update: %s | Auto-refresh: %v | Press 'r' to refresh, 'tab' to switch, 'enter' to view details, 'q' to quit",
 		m.lastUpdate.Format("15:04:05"), m.autoRefresh)
 	s.WriteString("\n")
 	s.WriteString(statusStyle.Render(status))
@@ -327,6 +356,22 @@ func (m Model) renderFileDiff() string {
 	return s.String()
 }
 
+// renderBuildLogs renders the build logs view
+func (m Model) renderBuildLogs() string {
+	var s strings.Builder
+
+	if m.selectedBuild != nil {
+		s.WriteString(titleStyle.Render(fmt.Sprintf("Build #%s Logs", m.selectedBuild.BuildNumber)))
+		s.WriteString("\n\n")
+	}
+
+	s.WriteString(m.logsViewport.View())
+	s.WriteString("\n")
+	s.WriteString(statusStyle.Render("Press 'esc' to go back, 'q' to quit"))
+
+	return s.String()
+}
+
 // handleEnter handles the enter key press
 func (m Model) handleEnter() (Model, tea.Cmd) {
 	switch m.view {
@@ -337,6 +382,13 @@ func (m Model) handleEnter() (Model, tea.Cmd) {
 			if idx >= 0 && idx < len(m.pullRequests) {
 				m.selectedPR = &m.pullRequests[idx]
 				return m, m.loadPRFiles(m.selectedPR)
+			}
+		} else if m.activeTab == 1 && len(m.builds) > 0 {
+			// Load build logs
+			idx := m.buildList.Index()
+			if idx >= 0 && idx < len(m.builds) {
+				m.selectedBuild = &m.builds[idx]
+				return m, m.loadBuildLogs(m.selectedBuild)
 			}
 		}
 
@@ -366,6 +418,8 @@ func (m *Model) updateSizes() {
 	m.fileList.SetSize(m.width-4, listHeight)
 	m.diffViewport.Width = m.width - 4
 	m.diffViewport.Height = m.height - 6
+	m.logsViewport.Width = m.width - 4
+	m.logsViewport.Height = m.height - 6
 }
 
 // tickCmd returns a command that sends a tick message

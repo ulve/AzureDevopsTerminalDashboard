@@ -69,3 +69,41 @@ func (m Model) loadFileDiff(pr *azuredevops.PullRequest, filePath string) tea.Cm
 		return DiffLoadedMsg{diff: diff}
 	}
 }
+
+// loadBuildLogs loads the logs for a build
+func (m Model) loadBuildLogs(build *azuredevops.Build) tea.Cmd {
+	return func() tea.Msg {
+		// Get the project name from the build - we'll need to find it from config
+		// For now, we'll try all projects in the config
+		var logs string
+		var lastErr error
+
+		for _, pipelineConfig := range m.config.Pipelines {
+			buildLogs, err := m.client.GetBuildLogs(pipelineConfig.Project, build.ID)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+
+			// Concatenate all log files
+			for _, log := range buildLogs {
+				content, err := m.client.GetBuildLogContent(pipelineConfig.Project, build.ID, log.ID)
+				if err != nil {
+					continue
+				}
+				logs += fmt.Sprintf("=== Log %d ===\n%s\n\n", log.ID, content)
+			}
+
+			// If we got logs, return them
+			if logs != "" {
+				return LogsLoadedMsg{logs: logs}
+			}
+		}
+
+		if lastErr != nil {
+			return LogsLoadedMsg{err: fmt.Errorf("failed to load build logs: %w", lastErr)}
+		}
+
+		return LogsLoadedMsg{logs: "No logs available for this build"}
+	}
+}
