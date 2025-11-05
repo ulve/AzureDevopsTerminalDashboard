@@ -53,26 +53,29 @@ func (i buildItem) Title() string {
 
 	statusIcon := getStatusIcon(status)
 
-	// Use pipeline name if available, otherwise show the definition ID
-	pipelineName := i.build.Definition.Name
-	if pipelineName == "" {
-		pipelineName = fmt.Sprintf("Pipeline (ID: %d)", i.build.Definition.ID)
-	}
-
-	return fmt.Sprintf("%s Build #%s: %s", statusIcon, i.build.BuildNumber, pipelineName)
+	// Show the actual build name from DevOps (which includes PR description, etc.)
+	return fmt.Sprintf("%s %s", statusIcon, i.build.BuildNumber)
 }
 
 func (i buildItem) Description() string {
 	branch := strings.TrimPrefix(i.build.SourceBranch, "refs/heads/")
+
+	// Use Result if available (succeeded, failed), otherwise use Status (inProgress, etc.)
+	status := i.build.Status
+	if i.build.Result != "" {
+		status = i.build.Result
+	}
+
+	// Format time with date (yyyy-mm-dd) before timestamp
 	timeStr := ""
 	if !i.build.StartTime.IsZero() {
-		timeStr = i.build.StartTime.Format("15:04:05")
+		timeStr = i.build.StartTime.Format("2006-01-02 15:04:05")
 	} else if !i.build.QueueTime.IsZero() {
-		timeStr = "Queued at " + i.build.QueueTime.Format("15:04:05")
+		timeStr = "Queued at " + i.build.QueueTime.Format("2006-01-02 15:04:05")
 	}
 
 	return fmt.Sprintf("Status: %s | Branch: %s | %s | by %s",
-		i.build.Status,
+		status,
 		branch,
 		timeStr,
 		i.build.RequestedFor.DisplayName)
