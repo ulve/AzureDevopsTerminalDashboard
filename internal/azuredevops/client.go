@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
+
+	"github.com/sergi/go-diff/diffmatchpatch"
 )
 
 const (
@@ -262,43 +265,68 @@ type PRChangesResponse struct {
 
 // GetPRFiles fetches the list of changed files in a pull request
 func (c *Client) GetPRFiles(project, repository string, prID int) ([]string, error) {
-	// Get the latest iteration
-	iterURL := fmt.Sprintf("%s/%s/%s/_apis/git/repositories/%s/pullRequests/%d/iterations?api-version=%s",
+	// Get all commits in the PR
+	commitsURL := fmt.Sprintf("%s/%s/%s/_apis/git/repositories/%s/pullRequests/%d/commits?api-version=%s",
 		baseURL, c.organization, project, repository, prID, apiVersion)
 
-	body, err := c.doRequest(iterURL)
+	body, err := c.doRequest(commitsURL)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get PR commits: %w", err)
 	}
 
-	var iterResponse PRIterationsResponse
-	if err := json.Unmarshal(body, &iterResponse); err != nil {
-		return nil, fmt.Errorf("failed to parse iterations response: %w", err)
+	var commitsResponse struct {
+		Value []struct {
+			CommitID string `json:"commitId"`
+		} `json:"value"`
 	}
 
-	if len(iterResponse.Value) == 0 {
-		return []string{}, nil
+	if err := json.Unmarshal(body, &commitsResponse); err != nil {
+		return nil, fmt.Errorf("failed to parse commits response: %w", err)
 	}
 
-	latestIter := iterResponse.Value[len(iterResponse.Value)-1]
-
-	// Get changes for the latest iteration
-	changesURL := fmt.Sprintf("%s/%s/%s/_apis/git/repositories/%s/pullRequests/%d/iterations/%d/changes?api-version=%s",
-		baseURL, c.organization, project, repository, prID, latestIter.ID, apiVersion)
-
-	body, err = c.doRequest(changesURL)
-	if err != nil {
-		return nil, err
+	if len(commitsResponse.Value) == 0 {
+		return nil, fmt.Errorf("no commits found in this PR")
 	}
 
-	var changesResponse PRChangesResponse
-	if err := json.Unmarshal(body, &changesResponse); err != nil {
-		return nil, fmt.Errorf("failed to parse changes response: %w", err)
+	// Collect all changed files from all commits
+	seenFiles := make(map[string]bool)
+	files := make([]string, 0)
+
+	for _, commit := range commitsResponse.Value {
+		// Get changes for each commit
+		changesURL := fmt.Sprintf("%s/%s/%s/_apis/git/repositories/%s/commits/%s/changes?api-version=%s",
+			baseURL, c.organization, project, repository, commit.CommitID, apiVersion)
+
+		body, err := c.doRequest(changesURL)
+		if err != nil {
+			// Skip commits that fail - might be merge commits or have issues
+			continue
+		}
+
+		var changesResponse struct {
+			Changes []struct {
+				Item struct {
+					Path string `json:"path"`
+				} `json:"item"`
+			} `json:"changes"`
+		}
+
+		if err := json.Unmarshal(body, &changesResponse); err != nil {
+			continue
+		}
+
+		// Add unique file paths
+		for _, change := range changesResponse.Changes {
+			path := change.Item.Path
+			if path != "" && !seenFiles[path] && path != "/" {
+				files = append(files, path)
+				seenFiles[path] = true
+			}
+		}
 	}
 
-	files := make([]string, 0, len(changesResponse.Changes))
-	for _, change := range changesResponse.Changes {
-		files = append(files, change.Item.Path)
+	if len(files) == 0 {
+		return nil, fmt.Errorf("no file changes found in this PR")
 	}
 
 	return files, nil
@@ -334,27 +362,99 @@ func (c *Client) GetPRFileDiff(project, repository string, prID int, filePath st
 		return "", fmt.Errorf("failed to parse PR details: %w", err)
 	}
 
-	// Get the file content from source commit
-	sourceURL := fmt.Sprintf("%s/%s/%s/_apis/git/repositories/%s/items?path=%s&versionDescriptor.versionType=commit&versionDescriptor.version=%s&api-version=%s",
-		baseURL, c.organization, project, repository, filePath, pr.LastMergeSourceCommit.CommitID, apiVersion)
-
-	sourceContent, err := c.doRequest(sourceURL)
-	if err != nil {
-		sourceContent = []byte("(new file)")
-	}
-
-	// Get the file content from target commit
+	// Get the file content from target commit (base)
 	targetURL := fmt.Sprintf("%s/%s/%s/_apis/git/repositories/%s/items?path=%s&versionDescriptor.versionType=commit&versionDescriptor.version=%s&api-version=%s",
 		baseURL, c.organization, project, repository, filePath, pr.LastMergeTargetCommit.CommitID, apiVersion)
 
 	targetContent, err := c.doRequest(targetURL)
+	targetText := ""
+	isNewFile := false
 	if err != nil {
-		targetContent = []byte("(deleted file)")
+		isNewFile = true
+		targetText = ""
+	} else {
+		targetText = string(targetContent)
 	}
 
-	// Return a simple comparison (in a real implementation, you'd want a proper diff library)
-	return fmt.Sprintf("=== %s ===\n\n--- Target Branch\n%s\n\n+++ Source Branch\n%s\n",
-		filePath, string(targetContent), string(sourceContent)), nil
+	// Get the file content from source commit (new)
+	sourceURL := fmt.Sprintf("%s/%s/%s/_apis/git/repositories/%s/items?path=%s&versionDescriptor.versionType=commit&versionDescriptor.version=%s&api-version=%s",
+		baseURL, c.organization, project, repository, filePath, pr.LastMergeSourceCommit.CommitID, apiVersion)
+
+	sourceContent, err := c.doRequest(sourceURL)
+	sourceText := ""
+	isDeletedFile := false
+	if err != nil {
+		isDeletedFile = true
+		sourceText = ""
+	} else {
+		sourceText = string(sourceContent)
+	}
+
+	// Generate unified diff
+	dmp := diffmatchpatch.New()
+	diffs := dmp.DiffMain(targetText, sourceText, false)
+
+	// Convert to unified diff format
+	var result strings.Builder
+	result.WriteString(fmt.Sprintf("diff --git a/%s b/%s\n", filePath, filePath))
+
+	if isNewFile {
+		result.WriteString("new file\n")
+		result.WriteString(fmt.Sprintf("--- /dev/null\n"))
+		result.WriteString(fmt.Sprintf("+++ b/%s\n", filePath))
+		// For new files, show all content as additions
+		lines := strings.Split(sourceText, "\n")
+		if len(lines) > 0 {
+			result.WriteString("@@ -0,0 +1," + fmt.Sprintf("%d", len(lines)) + " @@\n")
+			for _, line := range lines {
+				result.WriteString("+" + line + "\n")
+			}
+		}
+	} else if isDeletedFile {
+		result.WriteString("deleted file\n")
+		result.WriteString(fmt.Sprintf("--- a/%s\n", filePath))
+		result.WriteString(fmt.Sprintf("+++ /dev/null\n"))
+		// For deleted files, show all content as deletions
+		lines := strings.Split(targetText, "\n")
+		if len(lines) > 0 {
+			result.WriteString("@@ -1," + fmt.Sprintf("%d", len(lines)) + " +0,0 @@\n")
+			for _, line := range lines {
+				result.WriteString("-" + line + "\n")
+			}
+		}
+	} else {
+		result.WriteString(fmt.Sprintf("--- a/%s\n", filePath))
+		result.WriteString(fmt.Sprintf("+++ b/%s\n", filePath))
+
+		// Generate line-by-line diff manually
+		targetLines := strings.Split(targetText, "\n")
+		sourceLines := strings.Split(sourceText, "\n")
+
+		// Simple line-by-line comparison
+		result.WriteString(fmt.Sprintf("@@ -1,%d +1,%d @@\n", len(targetLines), len(sourceLines)))
+
+		// Show the diff using the dmp library's results
+		for _, diff := range diffs {
+			lines := strings.Split(diff.Text, "\n")
+			for i, line := range lines {
+				// Skip empty last line from split
+				if i == len(lines)-1 && line == "" {
+					continue
+				}
+
+				switch diff.Type {
+				case diffmatchpatch.DiffInsert:
+					result.WriteString("+" + line + "\n")
+				case diffmatchpatch.DiffDelete:
+					result.WriteString("-" + line + "\n")
+				case diffmatchpatch.DiffEqual:
+					result.WriteString(" " + line + "\n")
+				}
+			}
+		}
+	}
+
+	return result.String(), nil
 }
 
 // BuildLog represents a build log

@@ -20,6 +20,7 @@ type View int
 
 const (
 	ViewDashboard View = iota
+	ViewPRDetails
 	ViewPRFiles
 	ViewFileDiff
 	ViewBuildLogs
@@ -37,6 +38,7 @@ type Model struct {
 	fileList        list.Model
 	diffViewport    viewport.Model
 	logsViewport    viewport.Model
+	prDetailsViewport viewport.Model
 	selectedPR      *azuredevops.PullRequest
 	selectedBuild   *azuredevops.Build
 	selectedBuildProject string
@@ -111,6 +113,9 @@ func NewModel(cfg *config.Config, client *azuredevops.Client) Model {
 	// Create logs viewport
 	logsViewport := viewport.New(0, 0)
 
+	// Create PR details viewport
+	prDetailsViewport := viewport.New(0, 0)
+
 	return Model{
 		config:          cfg,
 		client:          client,
@@ -120,6 +125,7 @@ func NewModel(cfg *config.Config, client *azuredevops.Client) Model {
 		fileList:        fileList,
 		diffViewport:    diffViewport,
 		logsViewport:    logsViewport,
+		prDetailsViewport: prDetailsViewport,
 		loading:         true,
 		autoRefresh:     true,
 		refreshInterval: time.Duration(cfg.RefreshInterval) * time.Second,
@@ -167,18 +173,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "h", "left":
 			// Go back to previous view
 			switch m.view {
-			case ViewPRFiles:
+			case ViewPRDetails:
 				m.view = ViewDashboard
+				m.err = nil // Clear errors when going back
+			case ViewPRFiles:
+				m.view = ViewPRDetails
+				m.err = nil // Clear errors when going back
 			case ViewFileDiff:
 				m.view = ViewPRFiles
+				m.err = nil // Clear errors when going back
 			case ViewBuildLogs:
 				m.view = ViewDashboard
+				m.err = nil // Clear errors when going back
 			}
 
 		case "g":
 			// Open build in browser when in build logs view
 			if m.view == ViewBuildLogs && m.selectedBuild != nil {
 				return m, m.openBuildURL()
+			}
+			// Open PR in browser when in PR details view
+			if m.view == ViewPRDetails && m.selectedPR != nil {
+				return m, m.openPRURL()
+			}
+
+		case "c":
+			// Clone PR repository when in PR details view
+			if m.view == ViewPRDetails && m.selectedPR != nil {
+				return m, m.clonePRRepo()
 			}
 		}
 
@@ -202,7 +224,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case FilesLoadedMsg:
 		if msg.err != nil {
 			m.err = msg.err
+			m.view = ViewPRFiles
 		} else {
+			m.err = nil // Clear any previous errors
 			m.prFiles = msg.files
 			m.updateFileList()
 			m.view = ViewPRFiles
@@ -211,9 +235,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case DiffLoadedMsg:
 		if msg.err != nil {
 			m.err = msg.err
+			// Stay in ViewPRFiles so user can see error and try another file
 		} else {
+			m.err = nil // Clear any previous errors
 			m.currentDiff = msg.diff
-			m.diffViewport.SetContent(msg.diff)
+			// Format diff with colors
+			coloredDiff := m.formatDiff(msg.diff)
+			m.diffViewport.SetContent(coloredDiff)
 			m.view = ViewFileDiff
 		}
 
@@ -237,6 +265,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.buildList, cmd = m.buildList.Update(msg)
 		}
+	case ViewPRDetails:
+		m.prDetailsViewport, cmd = m.prDetailsViewport.Update(msg)
 	case ViewPRFiles:
 		m.fileList, cmd = m.fileList.Update(msg)
 	case ViewFileDiff:
@@ -258,6 +288,8 @@ func (m Model) View() string {
 	switch m.view {
 	case ViewDashboard:
 		return m.renderDashboard()
+	case ViewPRDetails:
+		return m.renderPRDetails()
 	case ViewPRFiles:
 		return m.renderPRFiles()
 	case ViewFileDiff:
@@ -325,10 +357,16 @@ func (m Model) renderDashboard() string {
 	}
 
 	// Status bar
-	status := fmt.Sprintf("Last update: %s | Auto-refresh: %v | Press 'r' to refresh, 'tab' to switch, 'enter' to view details, 'q' to quit",
-		m.lastUpdate.Format("15:04:05"), m.autoRefresh)
+	var statusText string
+	if m.activeTab == 0 {
+		statusText = fmt.Sprintf("Last update: %s | Auto-refresh: %v | Press 'r' to refresh, 'tab' to switch, 'enter' to view PR details, 'q' to quit",
+			m.lastUpdate.Format("15:04:05"), m.autoRefresh)
+	} else {
+		statusText = fmt.Sprintf("Last update: %s | Auto-refresh: %v | Press 'r' to refresh, 'tab' to switch, 'enter' to view build logs, 'q' to quit",
+			m.lastUpdate.Format("15:04:05"), m.autoRefresh)
+	}
 	s.WriteString("\n")
-	s.WriteString(statusStyle.Render(status))
+	s.WriteString(statusStyle.Render(statusText))
 
 	if m.err != nil {
 		s.WriteString("\n")
@@ -351,6 +389,11 @@ func (m Model) renderPRFiles() string {
 	s.WriteString("\n")
 	s.WriteString(statusStyle.Render("Press 'enter' to view diff, 'h' or left arrow to go back, 'q' to quit"))
 
+	if m.err != nil {
+		s.WriteString("\n")
+		s.WriteString(errorStyle.Render(fmt.Sprintf("Error: %v", m.err)))
+	}
+
 	return s.String()
 }
 
@@ -363,6 +406,82 @@ func (m Model) renderFileDiff() string {
 	s.WriteString(m.diffViewport.View())
 	s.WriteString("\n")
 	s.WriteString(statusStyle.Render("Press 'h' or left arrow to go back, 'q' to quit"))
+
+	return s.String()
+}
+
+// renderPRDetails renders the pull request details view
+func (m Model) renderPRDetails() string {
+	var s strings.Builder
+
+	if m.selectedPR == nil {
+		return "No PR selected"
+	}
+
+	pr := m.selectedPR
+
+	// Title with PR ID
+	draftIndicator := ""
+	if pr.IsDraft {
+		draftIndicator = " [DRAFT]"
+	}
+	s.WriteString(titleStyle.Render(fmt.Sprintf("PR #%d: %s%s", pr.ID, pr.Title, draftIndicator)))
+	s.WriteString("\n\n")
+
+	// PR Details in a formatted viewport
+	var details strings.Builder
+
+	// Basic info section
+	details.WriteString(lipgloss.NewStyle().Bold(true).Render("Status: "))
+	statusColor := "green"
+	switch pr.Status {
+	case "completed":
+		statusColor = "green"
+	case "active":
+		statusColor = "blue"
+	case "abandoned":
+		statusColor = "red"
+	}
+	details.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(statusColor)).Bold(true).Render(pr.Status))
+	details.WriteString("\n\n")
+
+	details.WriteString(lipgloss.NewStyle().Bold(true).Render("Created by: "))
+	details.WriteString(pr.CreatedBy.DisplayName)
+	details.WriteString("\n")
+
+	details.WriteString(lipgloss.NewStyle().Bold(true).Render("Created: "))
+	details.WriteString(pr.CreationDate.Format("2006-01-02 15:04:05"))
+	details.WriteString("\n\n")
+
+	// Branch information
+	sourceBranch := strings.TrimPrefix(pr.SourceRefName, "refs/heads/")
+	targetBranch := strings.TrimPrefix(pr.TargetRefName, "refs/heads/")
+	details.WriteString(lipgloss.NewStyle().Bold(true).Render("Branches: "))
+	details.WriteString(fmt.Sprintf("%s → %s\n\n", sourceBranch, targetBranch))
+
+	// Repository information
+	details.WriteString(lipgloss.NewStyle().Bold(true).Render("Project: "))
+	details.WriteString(pr.Repository.Project.Name)
+	details.WriteString("\n")
+
+	details.WriteString(lipgloss.NewStyle().Bold(true).Render("Repository: "))
+	details.WriteString(pr.Repository.Name)
+	details.WriteString("\n\n")
+
+	// Description
+	details.WriteString(lipgloss.NewStyle().Bold(true).Render("Description:"))
+	details.WriteString("\n")
+	if pr.Description != "" {
+		details.WriteString(pr.Description)
+	} else {
+		details.WriteString(lipgloss.NewStyle().Italic(true).Foreground(lipgloss.Color("241")).Render("(No description provided)"))
+	}
+	details.WriteString("\n")
+
+	m.prDetailsViewport.SetContent(details.String())
+	s.WriteString(m.prDetailsViewport.View())
+	s.WriteString("\n")
+	s.WriteString(statusStyle.Render("Press 'enter' to view files, 'g' to open in browser, 'c' to clone repo, 'h' or left arrow to go back, 'q' to quit"))
 
 	return s.String()
 }
@@ -392,11 +511,12 @@ func (m Model) handleEnter() (Model, tea.Cmd) {
 	switch m.view {
 	case ViewDashboard:
 		if m.activeTab == 0 && len(m.pullRequests) > 0 {
-			// Load PR files
+			// Show PR details
 			idx := m.prList.Index()
 			if idx >= 0 && idx < len(m.pullRequests) {
 				m.selectedPR = &m.pullRequests[idx]
-				return m, m.loadPRFiles(m.selectedPR)
+				m.view = ViewPRDetails
+				return m, nil
 			}
 		} else if m.activeTab == 1 && len(m.builds) > 0 {
 			// Load build logs
@@ -406,6 +526,12 @@ func (m Model) handleEnter() (Model, tea.Cmd) {
 				m.loadingLogs = true
 				return m, m.loadBuildLogs(m.selectedBuild)
 			}
+		}
+
+	case ViewPRDetails:
+		// Navigate to PR files from details view
+		if m.selectedPR != nil {
+			return m, m.loadPRFiles(m.selectedPR)
 		}
 
 	case ViewPRFiles:
@@ -436,6 +562,8 @@ func (m *Model) updateSizes() {
 	m.diffViewport.Height = m.height - 6
 	m.logsViewport.Width = m.width - 4
 	m.logsViewport.Height = m.height - 6
+	m.prDetailsViewport.Width = m.width - 4
+	m.prDetailsViewport.Height = m.height - 8
 }
 
 // tickCmd returns a command that sends a tick message
@@ -493,4 +621,110 @@ func (m Model) openBuildURL() tea.Cmd {
 		_ = cmd.Start()
 		return nil
 	}
+}
+
+// openPRURL opens the pull request in the default browser
+func (m Model) openPRURL() tea.Cmd {
+	return func() tea.Msg {
+		if m.selectedPR == nil {
+			return nil
+		}
+
+		pr := m.selectedPR
+		project := pr.Repository.Project.Name
+		repository := pr.Repository.Name
+
+		// Construct the Azure DevOps PR URL
+		url := fmt.Sprintf("https://dev.azure.com/%s/%s/_git/%s/pullrequest/%d",
+			m.config.Organization, project, repository, pr.ID)
+
+		// Open URL in default browser based on OS
+		var cmd *exec.Cmd
+		switch runtime.GOOS {
+		case "linux":
+			cmd = exec.Command("xdg-open", url)
+		case "darwin":
+			cmd = exec.Command("open", url)
+		case "windows":
+			cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+		default:
+			return nil
+		}
+
+		_ = cmd.Start()
+		return nil
+	}
+}
+
+// clonePRRepo clones the PR repository and checks out the source branch
+func (m Model) clonePRRepo() tea.Cmd {
+	return func() tea.Msg {
+		if m.selectedPR == nil {
+			return nil
+		}
+
+		pr := m.selectedPR
+		repository := pr.Repository.Name
+		sourceBranch := strings.TrimPrefix(pr.SourceRefName, "refs/heads/")
+
+		// Construct the clone URL
+		cloneURL := fmt.Sprintf("https://dev.azure.com/%s/%s/_git/%s",
+			m.config.Organization, pr.Repository.Project.Name, repository)
+
+		// Clone to current directory with repository name
+		cloneCmd := exec.Command("git", "clone", cloneURL, repository)
+		if err := cloneCmd.Run(); err != nil {
+			return nil
+		}
+
+		// Checkout the PR source branch
+		checkoutCmd := exec.Command("git", "-C", repository, "checkout", sourceBranch)
+		_ = checkoutCmd.Run()
+
+		return nil
+	}
+}
+
+// formatDiff colorizes diff output with Lipgloss
+func (m Model) formatDiff(diff string) string {
+	lines := strings.Split(diff, "\n")
+	var result strings.Builder
+
+	// Define styles for different diff elements
+	addedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("46"))        // bright green
+	deletedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))     // bright red
+	headerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true) // bright blue
+	hunkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("141"))        // purple/magenta
+
+	for _, line := range lines {
+		if len(line) == 0 {
+			result.WriteString("\n")
+			continue
+		}
+
+		switch {
+		case strings.HasPrefix(line, "+"):
+			if !strings.HasPrefix(line, "+++") {
+				result.WriteString(addedStyle.Render(line) + "\n")
+			} else {
+				result.WriteString(headerStyle.Render(line) + "\n")
+			}
+		case strings.HasPrefix(line, "-"):
+			if !strings.HasPrefix(line, "---") {
+				result.WriteString(deletedStyle.Render(line) + "\n")
+			} else {
+				result.WriteString(headerStyle.Render(line) + "\n")
+			}
+		case strings.HasPrefix(line, "@@"):
+			result.WriteString(hunkStyle.Render(line) + "\n")
+		case strings.HasPrefix(line, "diff --git"):
+			result.WriteString(headerStyle.Render(line) + "\n")
+		case strings.HasPrefix(line, "new file") || strings.HasPrefix(line, "deleted file"):
+			result.WriteString(hunkStyle.Render(line) + "\n")
+		default:
+			result.WriteString(line + "\n")
+		}
+	}
+
+	return result.String()
 }
