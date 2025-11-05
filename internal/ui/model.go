@@ -175,12 +175,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch m.view {
 			case ViewPRDetails:
 				m.view = ViewDashboard
+				m.err = nil // Clear errors when going back
 			case ViewPRFiles:
 				m.view = ViewPRDetails
+				m.err = nil // Clear errors when going back
 			case ViewFileDiff:
 				m.view = ViewPRFiles
+				m.err = nil // Clear errors when going back
 			case ViewBuildLogs:
 				m.view = ViewDashboard
+				m.err = nil // Clear errors when going back
 			}
 
 		case "g":
@@ -220,7 +224,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case FilesLoadedMsg:
 		if msg.err != nil {
 			m.err = msg.err
+			m.view = ViewPRFiles
 		} else {
+			m.err = nil // Clear any previous errors
 			m.prFiles = msg.files
 			m.updateFileList()
 			m.view = ViewPRFiles
@@ -229,7 +235,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case DiffLoadedMsg:
 		if msg.err != nil {
 			m.err = msg.err
+			// Stay in ViewPRFiles so user can see error and try another file
 		} else {
+			m.err = nil // Clear any previous errors
 			m.currentDiff = msg.diff
 			// Format diff with colors
 			coloredDiff := m.formatDiff(msg.diff)
@@ -380,6 +388,11 @@ func (m Model) renderPRFiles() string {
 	s.WriteString(m.fileList.View())
 	s.WriteString("\n")
 	s.WriteString(statusStyle.Render("Press 'enter' to view diff, 'h' or left arrow to go back, 'q' to quit"))
+
+	if m.err != nil {
+		s.WriteString("\n")
+		s.WriteString(errorStyle.Render(fmt.Sprintf("Error: %v", m.err)))
+	}
 
 	return s.String()
 }

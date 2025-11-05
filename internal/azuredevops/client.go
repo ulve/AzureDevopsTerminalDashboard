@@ -271,7 +271,7 @@ func (c *Client) GetPRFiles(project, repository string, prID int) ([]string, err
 
 	body, err := c.doRequest(iterURL)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get PR iterations: %w", err)
 	}
 
 	var iterResponse PRIterationsResponse
@@ -280,7 +280,7 @@ func (c *Client) GetPRFiles(project, repository string, prID int) ([]string, err
 	}
 
 	if len(iterResponse.Value) == 0 {
-		return []string{}, nil
+		return nil, fmt.Errorf("no iterations found for this PR - it may not have any commits yet")
 	}
 
 	latestIter := iterResponse.Value[len(iterResponse.Value)-1]
@@ -291,12 +291,16 @@ func (c *Client) GetPRFiles(project, repository string, prID int) ([]string, err
 
 	body, err = c.doRequest(changesURL)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get PR changes: %w", err)
 	}
 
 	var changesResponse PRChangesResponse
 	if err := json.Unmarshal(body, &changesResponse); err != nil {
 		return nil, fmt.Errorf("failed to parse changes response: %w", err)
+	}
+
+	if len(changesResponse.Changes) == 0 {
+		return nil, fmt.Errorf("no file changes found in this PR")
 	}
 
 	files := make([]string, 0, len(changesResponse.Changes))
