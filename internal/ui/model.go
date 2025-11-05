@@ -2,6 +2,8 @@ package ui
 
 import (
 	"fmt"
+	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -20,6 +22,7 @@ const (
 	ViewDashboard View = iota
 	ViewPRFiles
 	ViewFileDiff
+	ViewBuildLogs
 )
 
 // Model represents the application state
@@ -33,10 +36,15 @@ type Model struct {
 	buildList       list.Model
 	fileList        list.Model
 	diffViewport    viewport.Model
+	logsViewport    viewport.Model
 	selectedPR      *azuredevops.PullRequest
+	selectedBuild   *azuredevops.Build
+	selectedBuildProject string
 	prFiles         []string
 	currentDiff     string
+	buildLogs       string
 	loading         bool
+	loadingLogs     bool
 	err             error
 	lastUpdate      time.Time
 	autoRefresh     bool
@@ -68,6 +76,12 @@ type DiffLoadedMsg struct {
 	err  error
 }
 
+// LogsLoadedMsg represents loaded build logs
+type LogsLoadedMsg struct {
+	logs string
+	err  error
+}
+
 // NewModel creates a new application model
 func NewModel(cfg *config.Config, client *azuredevops.Client) Model {
 	// Create PR list
@@ -94,6 +108,9 @@ func NewModel(cfg *config.Config, client *azuredevops.Client) Model {
 	// Create diff viewport
 	diffViewport := viewport.New(0, 0)
 
+	// Create logs viewport
+	logsViewport := viewport.New(0, 0)
+
 	return Model{
 		config:          cfg,
 		client:          client,
@@ -102,6 +119,7 @@ func NewModel(cfg *config.Config, client *azuredevops.Client) Model {
 		buildList:       buildList,
 		fileList:        fileList,
 		diffViewport:    diffViewport,
+		logsViewport:    logsViewport,
 		loading:         true,
 		autoRefresh:     true,
 		refreshInterval: time.Duration(cfg.RefreshInterval) * time.Second,
@@ -146,13 +164,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			return m.handleEnter()
 
-		case "esc":
+		case "h", "left":
 			// Go back to previous view
 			switch m.view {
 			case ViewPRFiles:
 				m.view = ViewDashboard
 			case ViewFileDiff:
 				m.view = ViewPRFiles
+			case ViewBuildLogs:
+				m.view = ViewDashboard
+			}
+
+		case "g":
+			// Open build in browser when in build logs view
+			if m.view == ViewBuildLogs && m.selectedBuild != nil {
+				return m, m.openBuildURL()
 			}
 		}
 
@@ -190,6 +216,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.diffViewport.SetContent(msg.diff)
 			m.view = ViewFileDiff
 		}
+
+	case LogsLoadedMsg:
+		m.loadingLogs = false
+		if msg.err != nil {
+			m.err = msg.err
+		} else {
+			m.buildLogs = msg.logs
+			m.logsViewport.SetContent(msg.logs)
+			m.view = ViewBuildLogs
+		}
 	}
 
 	// Update active component based on view
@@ -205,6 +241,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.fileList, cmd = m.fileList.Update(msg)
 	case ViewFileDiff:
 		m.diffViewport, cmd = m.diffViewport.Update(msg)
+	case ViewBuildLogs:
+		m.logsViewport, cmd = m.logsViewport.Update(msg)
 	}
 	cmds = append(cmds, cmd)
 
@@ -224,6 +262,8 @@ func (m Model) View() string {
 		return m.renderPRFiles()
 	case ViewFileDiff:
 		return m.renderFileDiff()
+	case ViewBuildLogs:
+		return m.renderBuildLogs()
 	}
 
 	return ""
@@ -285,7 +325,7 @@ func (m Model) renderDashboard() string {
 	}
 
 	// Status bar
-	status := fmt.Sprintf("Last update: %s | Auto-refresh: %v | Press 'r' to refresh, 'tab' to switch, 'q' to quit",
+	status := fmt.Sprintf("Last update: %s | Auto-refresh: %v | Press 'r' to refresh, 'tab' to switch, 'enter' to view details, 'q' to quit",
 		m.lastUpdate.Format("15:04:05"), m.autoRefresh)
 	s.WriteString("\n")
 	s.WriteString(statusStyle.Render(status))
@@ -309,7 +349,7 @@ func (m Model) renderPRFiles() string {
 
 	s.WriteString(m.fileList.View())
 	s.WriteString("\n")
-	s.WriteString(statusStyle.Render("Press 'enter' to view diff, 'esc' to go back, 'q' to quit"))
+	s.WriteString(statusStyle.Render("Press 'enter' to view diff, 'h' or left arrow to go back, 'q' to quit"))
 
 	return s.String()
 }
@@ -322,7 +362,27 @@ func (m Model) renderFileDiff() string {
 	s.WriteString("\n\n")
 	s.WriteString(m.diffViewport.View())
 	s.WriteString("\n")
-	s.WriteString(statusStyle.Render("Press 'esc' to go back, 'q' to quit"))
+	s.WriteString(statusStyle.Render("Press 'h' or left arrow to go back, 'q' to quit"))
+
+	return s.String()
+}
+
+// renderBuildLogs renders the build logs view
+func (m Model) renderBuildLogs() string {
+	var s strings.Builder
+
+	if m.selectedBuild != nil {
+		s.WriteString(titleStyle.Render(fmt.Sprintf("Build #%s Logs", m.selectedBuild.BuildNumber)))
+		s.WriteString("\n\n")
+	}
+
+	if m.loadingLogs {
+		s.WriteString("\n  Loading logs...\n")
+	} else {
+		s.WriteString(m.logsViewport.View())
+	}
+	s.WriteString("\n")
+	s.WriteString(statusStyle.Render("Press 'g' to open in browser, 'h' or left arrow to go back, 'q' to quit"))
 
 	return s.String()
 }
@@ -337,6 +397,14 @@ func (m Model) handleEnter() (Model, tea.Cmd) {
 			if idx >= 0 && idx < len(m.pullRequests) {
 				m.selectedPR = &m.pullRequests[idx]
 				return m, m.loadPRFiles(m.selectedPR)
+			}
+		} else if m.activeTab == 1 && len(m.builds) > 0 {
+			// Load build logs
+			idx := m.buildList.Index()
+			if idx >= 0 && idx < len(m.builds) {
+				m.selectedBuild = &m.builds[idx]
+				m.loadingLogs = true
+				return m, m.loadBuildLogs(m.selectedBuild)
 			}
 		}
 
@@ -366,6 +434,8 @@ func (m *Model) updateSizes() {
 	m.fileList.SetSize(m.width-4, listHeight)
 	m.diffViewport.Width = m.width - 4
 	m.diffViewport.Height = m.height - 6
+	m.logsViewport.Width = m.width - 4
+	m.logsViewport.Height = m.height - 6
 }
 
 // tickCmd returns a command that sends a tick message
@@ -373,4 +443,54 @@ func (m Model) tickCmd() tea.Cmd {
 	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
 		return TickMsg(t)
 	})
+}
+
+// openBuildURL opens the build in the default browser
+func (m Model) openBuildURL() tea.Cmd {
+	return func() tea.Msg {
+		if m.selectedBuild == nil {
+			return nil
+		}
+
+		// Try to determine the project by checking which pipeline this build belongs to
+		project := ""
+		if len(m.config.Pipelines) > 0 {
+			// If we only have one project, use it
+			if len(m.config.Pipelines) == 1 {
+				project = m.config.Pipelines[0].Project
+			} else {
+				// Try to match by definition ID
+				for _, p := range m.config.Pipelines {
+					if p.DefinitionID == m.selectedBuild.Definition.ID {
+						project = p.Project
+						break
+					}
+				}
+				// If no match found, use the first project
+				if project == "" {
+					project = m.config.Pipelines[0].Project
+				}
+			}
+		}
+
+		// Construct the Azure DevOps build URL
+		url := fmt.Sprintf("https://dev.azure.com/%s/%s/_build/results?buildId=%d",
+			m.config.Organization, project, m.selectedBuild.ID)
+
+		// Open URL in default browser based on OS
+		var cmd *exec.Cmd
+		switch runtime.GOOS {
+		case "linux":
+			cmd = exec.Command("xdg-open", url)
+		case "darwin":
+			cmd = exec.Command("open", url)
+		case "windows":
+			cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+		default:
+			return nil
+		}
+
+		_ = cmd.Start()
+		return nil
+	}
 }

@@ -356,3 +356,47 @@ func (c *Client) GetPRFileDiff(project, repository string, prID int, filePath st
 	return fmt.Sprintf("=== %s ===\n\n--- Target Branch\n%s\n\n+++ Source Branch\n%s\n",
 		filePath, string(targetContent), string(sourceContent)), nil
 }
+
+// BuildLog represents a build log
+type BuildLog struct {
+	ID   int    `json:"id"`
+	Type string `json:"type"`
+	URL  string `json:"url"`
+}
+
+// BuildLogsResponse represents the API response for build logs
+type BuildLogsResponse struct {
+	Value []BuildLog `json:"value"`
+	Count int        `json:"count"`
+}
+
+// GetBuildLogs fetches the list of logs for a build
+func (c *Client) GetBuildLogs(project string, buildID int) ([]BuildLog, error) {
+	url := fmt.Sprintf("%s/%s/%s/_apis/build/builds/%d/logs?api-version=%s",
+		baseURL, c.organization, project, buildID, apiVersion)
+
+	body, err := c.doRequest(url)
+	if err != nil {
+		return nil, err
+	}
+
+	var response BuildLogsResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, fmt.Errorf("failed to parse build logs response: %w", err)
+	}
+
+	return response.Value, nil
+}
+
+// GetBuildLogContent fetches the content of a specific build log
+func (c *Client) GetBuildLogContent(project string, buildID int, logID int) (string, error) {
+	url := fmt.Sprintf("%s/%s/%s/_apis/build/builds/%d/logs/%d?api-version=%s",
+		baseURL, c.organization, project, buildID, logID, apiVersion)
+
+	body, err := c.doRequest(url)
+	if err != nil {
+		return "", err
+	}
+
+	return string(body), nil
+}
