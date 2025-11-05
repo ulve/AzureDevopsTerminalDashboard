@@ -2,22 +2,30 @@
   "organization": "your-organization-name",
   "pullRequests": [
     {
-      "project": "MyProject",
-      "repository": "MyRepo"
+      "project": "WebApp",
+      "repository": "frontend"
     },
     {
-      "project": "AnotherProject",
-      "repository": "AnotherRepo"
+      "project": "WebApp",
+      "repository": "backend-api"
+    },
+    {
+      "project": "Infrastructure",
+      "repository": "terraform-modules"
     }
   ],
   "pipelines": [
     {
-      "project": "MyProject",
-      "pipeline": "MyPipeline"
+      "project": "WebApp",
+      "pipeline": "frontend-ci-cd"
     },
     {
-      "project": "AnotherProject",
-      "pipeline": "CI-Pipeline"
+      "project": "WebApp",
+      "pipeline": "backend-api-build"
+    },
+    {
+      "project": "Infrastructure",
+      "pipeline": "terraform-deploy"
     }
   ],
   "refreshInterval": 30
