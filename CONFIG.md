@@ -163,13 +163,20 @@ Array of pipelines to monitor for builds. At least one of `pullRequests` or `pip
 
 **Fields:**
 - `project` (required, string): The Azure DevOps project name
-- `pipeline` (required, string): The pipeline name (not ID) as displayed in Azure DevOps
+- `pipeline` (optional, string): The pipeline name as displayed in Azure DevOps
+- `definitionId` (optional, integer): The pipeline definition ID
+
+**Note:** You must provide either `pipeline` (name) OR `definitionId`. Using `definitionId` is more reliable when pipeline names contain special characters or are difficult to match exactly.
 
 **Finding values:**
 - Project: From your project URL: `https://dev.azure.com/{org}/{project}`
-- Pipeline: Navigate to Pipelines, use the exact name shown in the list (not the ID)
+- Pipeline Name: Navigate to Pipelines, use the exact name shown in the list
+- Definition ID: From the pipeline URL: `https://dev.azure.com/{org}/{project}/_build?definitionId={id}`
+  - Click on a pipeline in Azure DevOps
+  - Look at the URL for `definitionId=XXX`
+  - Use that number in your config
 
-**Example:**
+**Example (using pipeline names):**
 ```json
 {
   "pipelines": [
@@ -184,6 +191,38 @@ Array of pipelines to monitor for builds. At least one of `pullRequests` or `pip
     {
       "project": "Infrastructure",
       "pipeline": "deploy-production"
+    }
+  ]
+}
+```
+
+**Example (using definition IDs - RECOMMENDED for pipelines with complex names):**
+```json
+{
+  "pipelines": [
+    {
+      "project": "FO.OP",
+      "definitionId": 522
+    },
+    {
+      "project": "MyTeam",
+      "definitionId": 145
+    }
+  ]
+}
+```
+
+**Example (mixed - both methods work together):**
+```json
+{
+  "pipelines": [
+    {
+      "project": "MyTeam",
+      "pipeline": "simple-pipeline-name"
+    },
+    {
+      "project": "FO.OP",
+      "definitionId": 522
     }
   ]
 }
@@ -400,16 +439,28 @@ A pull request entry is missing the `project` field.
 }
 ```
 
-### "pipeline X: pipeline is required"
-A pipeline entry is missing the `pipeline` field.
+### "pipeline X: either pipeline name or definitionId is required"
+A pipeline entry is missing both the `pipeline` and `definitionId` fields.
 
-**Fix:** Add the pipeline name:
+**Fix:** Add either the pipeline name OR definition ID:
 ```json
 {
   "pipelines": [
     {
       "project": "MyProject",
       "pipeline": "MyPipeline"
+    }
+  ]
+}
+```
+
+Or using definition ID:
+```json
+{
+  "pipelines": [
+    {
+      "project": "MyProject",
+      "definitionId": 123
     }
   ]
 }
@@ -513,6 +564,26 @@ This reduces API calls and improves performance.
 - Double-check organization, project, repository, and pipeline names
 - Ensure exact name matches (case-sensitive)
 - Verify you have access to the specified resources
+
+### "pipeline 'X' not found in project 'Y'" errors
+This error occurs when the pipeline name doesn't exactly match what's in Azure DevOps. **Solution: Use `definitionId` instead of `pipeline` name.**
+
+**To find your definition ID:**
+1. Navigate to your pipeline in Azure DevOps
+2. Look at the URL: `https://dev.azure.com/{org}/{project}/_build?definitionId=522`
+3. Use the number (e.g., 522) in your config:
+   ```json
+   {
+     "pipelines": [
+       {
+         "project": "FO.OP",
+         "definitionId": 522
+       }
+     ]
+   }
+   ```
+
+This is more reliable than pipeline names, especially when names contain special characters (like hyphens, spaces, or dots).
 
 ### Performance issues
 - Reduce number of monitored repositories/pipelines

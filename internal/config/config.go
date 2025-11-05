@@ -14,8 +14,9 @@ type PullRequestConfig struct {
 
 // PipelineConfig represents a single pipeline source
 type PipelineConfig struct {
-	Project  string `json:"project"`
-	Pipeline string `json:"pipeline"`
+	Project      string `json:"project"`
+	Pipeline     string `json:"pipeline"`     // Pipeline name (optional if DefinitionID is provided)
+	DefinitionID int    `json:"definitionId"` // Pipeline definition ID (optional if Pipeline is provided)
 }
 
 // Config represents the application configuration
@@ -69,8 +70,8 @@ func (c *Config) Validate() error {
 		if p.Project == "" {
 			return fmt.Errorf("pipeline %d: project is required", i)
 		}
-		if p.Pipeline == "" {
-			return fmt.Errorf("pipeline %d: pipeline is required", i)
+		if p.Pipeline == "" && p.DefinitionID == 0 {
+			return fmt.Errorf("pipeline %d: either pipeline name or definitionId is required", i)
 		}
 	}
 
