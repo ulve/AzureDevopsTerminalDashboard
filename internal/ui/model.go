@@ -192,6 +192,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.view == ViewPRDetails && m.selectedPR != nil {
 				return m, m.openPRURL()
 			}
+
+		case "c":
+			// Clone PR repository when in PR details view
+			if m.view == ViewPRDetails && m.selectedPR != nil {
+				return m, m.clonePRRepo()
+			}
 		}
 
 	case TickMsg:
@@ -225,7 +231,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = msg.err
 		} else {
 			m.currentDiff = msg.diff
-			m.diffViewport.SetContent(msg.diff)
+			// Format diff with colors
+			coloredDiff := m.formatDiff(msg.diff)
+			m.diffViewport.SetContent(coloredDiff)
 			m.view = ViewFileDiff
 		}
 
@@ -460,7 +468,7 @@ func (m Model) renderPRDetails() string {
 	m.prDetailsViewport.SetContent(details.String())
 	s.WriteString(m.prDetailsViewport.View())
 	s.WriteString("\n")
-	s.WriteString(statusStyle.Render("Press 'enter' to view files, 'g' to open in browser, 'h' or left arrow to go back, 'q' to quit"))
+	s.WriteString(statusStyle.Render("Press 'enter' to view files, 'g' to open in browser, 'c' to clone repo, 'h' or left arrow to go back, 'q' to quit"))
 
 	return s.String()
 }
@@ -633,4 +641,77 @@ func (m Model) openPRURL() tea.Cmd {
 		_ = cmd.Start()
 		return nil
 	}
+}
+
+// clonePRRepo clones the PR repository and checks out the source branch
+func (m Model) clonePRRepo() tea.Cmd {
+	return func() tea.Msg {
+		if m.selectedPR == nil {
+			return nil
+		}
+
+		pr := m.selectedPR
+		repository := pr.Repository.Name
+		sourceBranch := strings.TrimPrefix(pr.SourceRefName, "refs/heads/")
+
+		// Construct the clone URL
+		cloneURL := fmt.Sprintf("https://dev.azure.com/%s/%s/_git/%s",
+			m.config.Organization, pr.Repository.Project.Name, repository)
+
+		// Clone to current directory with repository name
+		cloneCmd := exec.Command("git", "clone", cloneURL, repository)
+		if err := cloneCmd.Run(); err != nil {
+			return nil
+		}
+
+		// Checkout the PR source branch
+		checkoutCmd := exec.Command("git", "-C", repository, "checkout", sourceBranch)
+		_ = checkoutCmd.Run()
+
+		return nil
+	}
+}
+
+// formatDiff colorizes diff output with Lipgloss
+func (m Model) formatDiff(diff string) string {
+	lines := strings.Split(diff, "\n")
+	var result strings.Builder
+
+	// Define styles for different diff elements
+	addedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("46"))        // bright green
+	deletedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))     // bright red
+	headerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true) // bright blue
+	hunkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("141"))        // purple/magenta
+
+	for _, line := range lines {
+		if len(line) == 0 {
+			result.WriteString("\n")
+			continue
+		}
+
+		switch {
+		case strings.HasPrefix(line, "+"):
+			if !strings.HasPrefix(line, "+++") {
+				result.WriteString(addedStyle.Render(line) + "\n")
+			} else {
+				result.WriteString(headerStyle.Render(line) + "\n")
+			}
+		case strings.HasPrefix(line, "-"):
+			if !strings.HasPrefix(line, "---") {
+				result.WriteString(deletedStyle.Render(line) + "\n")
+			} else {
+				result.WriteString(headerStyle.Render(line) + "\n")
+			}
+		case strings.HasPrefix(line, "@@"):
+			result.WriteString(hunkStyle.Render(line) + "\n")
+		case strings.HasPrefix(line, "diff --git"):
+			result.WriteString(headerStyle.Render(line) + "\n")
+		case strings.HasPrefix(line, "new file") || strings.HasPrefix(line, "deleted file"):
+			result.WriteString(hunkStyle.Render(line) + "\n")
+		default:
+			result.WriteString(line + "\n")
+		}
+	}
+
+	return result.String()
 }

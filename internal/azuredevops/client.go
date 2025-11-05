@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
+
+	"github.com/sergi/go-diff/diffmatchpatch"
 )
 
 const (
@@ -334,27 +337,79 @@ func (c *Client) GetPRFileDiff(project, repository string, prID int, filePath st
 		return "", fmt.Errorf("failed to parse PR details: %w", err)
 	}
 
-	// Get the file content from source commit
-	sourceURL := fmt.Sprintf("%s/%s/%s/_apis/git/repositories/%s/items?path=%s&versionDescriptor.versionType=commit&versionDescriptor.version=%s&api-version=%s",
-		baseURL, c.organization, project, repository, filePath, pr.LastMergeSourceCommit.CommitID, apiVersion)
-
-	sourceContent, err := c.doRequest(sourceURL)
-	if err != nil {
-		sourceContent = []byte("(new file)")
-	}
-
-	// Get the file content from target commit
+	// Get the file content from target commit (base)
 	targetURL := fmt.Sprintf("%s/%s/%s/_apis/git/repositories/%s/items?path=%s&versionDescriptor.versionType=commit&versionDescriptor.version=%s&api-version=%s",
 		baseURL, c.organization, project, repository, filePath, pr.LastMergeTargetCommit.CommitID, apiVersion)
 
 	targetContent, err := c.doRequest(targetURL)
+	targetText := ""
+	isNewFile := false
 	if err != nil {
-		targetContent = []byte("(deleted file)")
+		isNewFile = true
+		targetText = ""
+	} else {
+		targetText = string(targetContent)
 	}
 
-	// Return a simple comparison (in a real implementation, you'd want a proper diff library)
-	return fmt.Sprintf("=== %s ===\n\n--- Target Branch\n%s\n\n+++ Source Branch\n%s\n",
-		filePath, string(targetContent), string(sourceContent)), nil
+	// Get the file content from source commit (new)
+	sourceURL := fmt.Sprintf("%s/%s/%s/_apis/git/repositories/%s/items?path=%s&versionDescriptor.versionType=commit&versionDescriptor.version=%s&api-version=%s",
+		baseURL, c.organization, project, repository, filePath, pr.LastMergeSourceCommit.CommitID, apiVersion)
+
+	sourceContent, err := c.doRequest(sourceURL)
+	sourceText := ""
+	isDeletedFile := false
+	if err != nil {
+		isDeletedFile = true
+		sourceText = ""
+	} else {
+		sourceText = string(sourceContent)
+	}
+
+	// Generate unified diff
+	dmp := diffmatchpatch.New()
+	diffs := dmp.DiffMain(targetText, sourceText, false)
+
+	// Convert to unified diff format
+	var result strings.Builder
+	result.WriteString(fmt.Sprintf("diff --git a/%s b/%s\n", filePath, filePath))
+
+	if isNewFile {
+		result.WriteString("new file\n")
+		result.WriteString(fmt.Sprintf("--- /dev/null\n"))
+		result.WriteString(fmt.Sprintf("+++ b/%s\n", filePath))
+	} else if isDeletedFile {
+		result.WriteString("deleted file\n")
+		result.WriteString(fmt.Sprintf("--- a/%s\n", filePath))
+		result.WriteString(fmt.Sprintf("+++ /dev/null\n"))
+	} else {
+		result.WriteString(fmt.Sprintf("--- a/%s\n", filePath))
+		result.WriteString(fmt.Sprintf("+++ b/%s\n", filePath))
+	}
+
+	// Generate unified diff format
+	patches := dmp.PatchMake(targetText, diffs)
+	patchText := dmp.PatchToText(patches)
+
+	// If we have patches, include them
+	if patchText != "" {
+		result.WriteString(patchText)
+	} else if isNewFile {
+		// For new files, show all content as additions
+		lines := strings.Split(sourceText, "\n")
+		result.WriteString("@@ -0,0 +1," + fmt.Sprintf("%d", len(lines)) + " @@\n")
+		for _, line := range lines {
+			result.WriteString("+" + line + "\n")
+		}
+	} else if isDeletedFile {
+		// For deleted files, show all content as deletions
+		lines := strings.Split(targetText, "\n")
+		result.WriteString("@@ -1," + fmt.Sprintf("%d", len(lines)) + " +0,0 @@\n")
+		for _, line := range lines {
+			result.WriteString("-" + line + "\n")
+		}
+	}
+
+	return result.String(), nil
 }
 
 // BuildLog represents a build log
