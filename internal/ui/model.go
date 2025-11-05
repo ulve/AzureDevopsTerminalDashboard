@@ -2,6 +2,8 @@ package ui
 
 import (
 	"fmt"
+	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -37,6 +39,7 @@ type Model struct {
 	logsViewport    viewport.Model
 	selectedPR      *azuredevops.PullRequest
 	selectedBuild   *azuredevops.Build
+	selectedBuildProject string
 	prFiles         []string
 	currentDiff     string
 	buildLogs       string
@@ -170,6 +173,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.view = ViewPRFiles
 			case ViewBuildLogs:
 				m.view = ViewDashboard
+			}
+
+		case "g":
+			// Open build in browser when in build logs view
+			if m.view == ViewBuildLogs && m.selectedBuild != nil {
+				return m, m.openBuildURL()
 			}
 		}
 
@@ -373,7 +382,7 @@ func (m Model) renderBuildLogs() string {
 		s.WriteString(m.logsViewport.View())
 	}
 	s.WriteString("\n")
-	s.WriteString(statusStyle.Render("Press 'h' or left arrow to go back, 'q' to quit"))
+	s.WriteString(statusStyle.Render("Press 'g' to open in browser, 'h' or left arrow to go back, 'q' to quit"))
 
 	return s.String()
 }
@@ -434,4 +443,54 @@ func (m Model) tickCmd() tea.Cmd {
 	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
 		return TickMsg(t)
 	})
+}
+
+// openBuildURL opens the build in the default browser
+func (m Model) openBuildURL() tea.Cmd {
+	return func() tea.Msg {
+		if m.selectedBuild == nil {
+			return nil
+		}
+
+		// Try to determine the project by checking which pipeline this build belongs to
+		project := ""
+		if len(m.config.Pipelines) > 0 {
+			// If we only have one project, use it
+			if len(m.config.Pipelines) == 1 {
+				project = m.config.Pipelines[0].Project
+			} else {
+				// Try to match by definition ID
+				for _, p := range m.config.Pipelines {
+					if p.DefinitionID == m.selectedBuild.Definition.ID {
+						project = p.Project
+						break
+					}
+				}
+				// If no match found, use the first project
+				if project == "" {
+					project = m.config.Pipelines[0].Project
+				}
+			}
+		}
+
+		// Construct the Azure DevOps build URL
+		url := fmt.Sprintf("https://dev.azure.com/%s/%s/_build/results?buildId=%d",
+			m.config.Organization, project, m.selectedBuild.ID)
+
+		// Open URL in default browser based on OS
+		var cmd *exec.Cmd
+		switch runtime.GOOS {
+		case "linux":
+			cmd = exec.Command("xdg-open", url)
+		case "darwin":
+			cmd = exec.Command("open", url)
+		case "windows":
+			cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+		default:
+			return nil
+		}
+
+		_ = cmd.Start()
+		return nil
+	}
 }

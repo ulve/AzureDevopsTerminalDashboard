@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/ulve/azuredevops-terminal-dashboard/internal/azuredevops"
 )
 
@@ -75,7 +76,7 @@ func (i buildItem) Description() string {
 	}
 
 	return fmt.Sprintf("Status: %s | Branch: %s | %s | by %s",
-		status,
+		getColoredStatus(status),
 		branch,
 		timeStr,
 		i.build.RequestedFor.DisplayName)
@@ -98,22 +99,60 @@ func (i fileItem) Description() string {
 	return ""
 }
 
-// getStatusIcon returns an icon for a build status
+// getStatusIcon returns a colored icon for a build status
 func getStatusIcon(status string) string {
+	var style lipgloss.Style
+	var icon string
+
 	switch strings.ToLower(status) {
 	case "succeeded":
-		return "✓"
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("10")) // Green
+		icon = "✓"
 	case "failed":
-		return "✗"
-	case "inprogress", "notstarted":
-		return "●"
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("9")) // Red
+		icon = "✗"
+	case "inprogress":
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("11")) // Yellow
+		icon = "●"
+	case "notstarted":
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("8")) // Gray
+		icon = "●"
 	case "canceled", "cancelled":
-		return "○"
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("8")) // Gray
+		icon = "○"
 	case "partiallysucceeded":
-		return "◐"
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("11")) // Yellow
+		icon = "◐"
 	default:
-		return "◯"
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("8")) // Gray
+		icon = "◯"
 	}
+
+	return style.Render(icon)
+}
+
+// getColoredStatus returns a colored status string
+func getColoredStatus(status string) string {
+	var style lipgloss.Style
+
+	switch strings.ToLower(status) {
+	case "succeeded":
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Bold(true) // Green
+	case "failed":
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true) // Red
+	case "inprogress":
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Bold(true) // Yellow
+	case "notstarted":
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("8")) // Gray
+	case "canceled", "cancelled":
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("8")) // Gray
+	case "partiallysucceeded":
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Bold(true) // Yellow
+	default:
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("8")) // Gray
+	}
+
+	return style.Render(status)
 }
 
 // updateLists updates the list items with current data
