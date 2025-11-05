@@ -161,7 +161,7 @@ func (c *Client) GetBuilds(project, pipelineName string, definitionID int) ([]Bu
 		}
 	}
 
-	url := fmt.Sprintf("%s/%s/%s/_apis/build/builds?definitions=%d&$top=10&api-version=%s",
+	url := fmt.Sprintf("%s/%s/%s/_apis/build/builds?definitions=%d&statusFilter=all&$top=10&api-version=%s",
 		baseURL, c.organization, project, definition.ID, apiVersion)
 
 	body, err := c.doRequest(url)
