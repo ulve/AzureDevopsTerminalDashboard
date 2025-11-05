@@ -265,59 +265,63 @@ type PRChangesResponse struct {
 
 // GetPRFiles fetches the list of changed files in a pull request
 func (c *Client) GetPRFiles(project, repository string, prID int) ([]string, error) {
-	// First, get PR details to get the source and target commits
-	prURL := fmt.Sprintf("%s/%s/%s/_apis/git/repositories/%s/pullRequests/%d?api-version=%s",
+	// Get all commits in the PR
+	commitsURL := fmt.Sprintf("%s/%s/%s/_apis/git/repositories/%s/pullRequests/%d/commits?api-version=%s",
 		baseURL, c.organization, project, repository, prID, apiVersion)
 
-	body, err := c.doRequest(prURL)
+	body, err := c.doRequest(commitsURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get PR details: %w", err)
+		return nil, fmt.Errorf("failed to get PR commits: %w", err)
 	}
 
-	var pr struct {
-		LastMergeSourceCommit struct {
+	var commitsResponse struct {
+		Value []struct {
 			CommitID string `json:"commitId"`
-		} `json:"lastMergeSourceCommit"`
-		LastMergeTargetCommit struct {
-			CommitID string `json:"commitId"`
-		} `json:"lastMergeTargetCommit"`
+		} `json:"value"`
 	}
 
-	if err := json.Unmarshal(body, &pr); err != nil {
-		return nil, fmt.Errorf("failed to parse PR details: %w", err)
+	if err := json.Unmarshal(body, &commitsResponse); err != nil {
+		return nil, fmt.Errorf("failed to parse commits response: %w", err)
 	}
 
-	// Get the diff between target (base) and source (head) commits
-	diffsURL := fmt.Sprintf("%s/%s/%s/_apis/git/repositories/%s/diffs/commits?baseVersion=%s&targetVersion=%s&api-version=%s",
-		baseURL, c.organization, project, repository, pr.LastMergeTargetCommit.CommitID, pr.LastMergeSourceCommit.CommitID, apiVersion)
-
-	body, err = c.doRequest(diffsURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get commit diffs: %w", err)
+	if len(commitsResponse.Value) == 0 {
+		return nil, fmt.Errorf("no commits found in this PR")
 	}
 
-	var diffsResponse struct {
-		Changes []struct {
-			Item struct {
-				Path string `json:"path"`
-			} `json:"item"`
-		} `json:"changes"`
-	}
+	// Collect all changed files from all commits
+	seenFiles := make(map[string]bool)
+	files := make([]string, 0)
 
-	if err := json.Unmarshal(body, &diffsResponse); err != nil {
-		return nil, fmt.Errorf("failed to parse diffs response: %w", err)
-	}
+	for _, commit := range commitsResponse.Value {
+		// Get changes for each commit
+		changesURL := fmt.Sprintf("%s/%s/%s/_apis/git/repositories/%s/commits/%s/changes?api-version=%s",
+			baseURL, c.organization, project, repository, commit.CommitID, apiVersion)
 
-	if len(diffsResponse.Changes) == 0 {
-		return nil, fmt.Errorf("no file changes found in this PR")
-	}
+		body, err := c.doRequest(changesURL)
+		if err != nil {
+			// Skip commits that fail - might be merge commits or have issues
+			continue
+		}
 
-	files := make([]string, 0, len(diffsResponse.Changes))
-	seenFiles := make(map[string]bool) // Deduplicate files
-	for _, change := range diffsResponse.Changes {
-		if change.Item.Path != "" && !seenFiles[change.Item.Path] {
-			files = append(files, change.Item.Path)
-			seenFiles[change.Item.Path] = true
+		var changesResponse struct {
+			Changes []struct {
+				Item struct {
+					Path string `json:"path"`
+				} `json:"item"`
+			} `json:"changes"`
+		}
+
+		if err := json.Unmarshal(body, &changesResponse); err != nil {
+			continue
+		}
+
+		// Add unique file paths
+		for _, change := range changesResponse.Changes {
+			path := change.Item.Path
+			if path != "" && !seenFiles[path] && path != "/" {
+				files = append(files, path)
+				seenFiles[path] = true
+			}
 		}
 	}
 
