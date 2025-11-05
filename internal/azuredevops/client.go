@@ -142,11 +142,23 @@ type BuildsResponse struct {
 }
 
 // GetBuilds fetches recent builds for a pipeline
-func (c *Client) GetBuilds(project, pipelineName string) ([]Build, error) {
-	// First, we need to get the pipeline definition (ID and Name)
-	definition, err := c.getPipelineDefinition(project, pipelineName)
-	if err != nil {
-		return nil, err
+// Either pipelineName or definitionID can be provided. If definitionID is provided (> 0), it will be used directly.
+func (c *Client) GetBuilds(project, pipelineName string, definitionID int) ([]Build, error) {
+	var definition Definition
+	var err error
+
+	if definitionID > 0 {
+		// Use the provided definition ID directly
+		definition, err = c.getDefinitionByID(project, definitionID)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		// Search for pipeline by name
+		definition, err = c.getPipelineDefinition(project, pipelineName)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	url := fmt.Sprintf("%s/%s/%s/_apis/build/builds?definitions=%d&$top=10&api-version=%s",
@@ -180,6 +192,24 @@ func (c *Client) GetBuilds(project, pipelineName string) ([]Build, error) {
 type DefinitionsResponse struct {
 	Value []Definition `json:"value"`
 	Count int         `json:"count"`
+}
+
+// getDefinitionByID gets the pipeline definition by its ID
+func (c *Client) getDefinitionByID(project string, definitionID int) (Definition, error) {
+	url := fmt.Sprintf("%s/%s/%s/_apis/build/definitions/%d?api-version=%s",
+		baseURL, c.organization, project, definitionID, apiVersion)
+
+	body, err := c.doRequest(url)
+	if err != nil {
+		return Definition{}, fmt.Errorf("failed to get definition %d: %w", definitionID, err)
+	}
+
+	var definition Definition
+	if err := json.Unmarshal(body, &definition); err != nil {
+		return Definition{}, fmt.Errorf("failed to parse definition response: %w", err)
+	}
+
+	return definition, nil
 }
 
 // getPipelineDefinition gets the pipeline definition (ID and Name) by name

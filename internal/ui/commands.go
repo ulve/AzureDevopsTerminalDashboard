@@ -26,9 +26,13 @@ func (m Model) loadData() tea.Cmd {
 
 		// Load builds
 		for _, pipelineConfig := range m.config.Pipelines {
-			builds, err := m.client.GetBuilds(pipelineConfig.Project, pipelineConfig.Pipeline)
+			builds, err := m.client.GetBuilds(pipelineConfig.Project, pipelineConfig.Pipeline, pipelineConfig.DefinitionID)
 			if err != nil {
-				lastErr = fmt.Errorf("failed to load builds for %s/%s: %w", pipelineConfig.Project, pipelineConfig.Pipeline, err)
+				pipelineIdentifier := pipelineConfig.Pipeline
+				if pipelineConfig.DefinitionID > 0 {
+					pipelineIdentifier = fmt.Sprintf("ID:%d", pipelineConfig.DefinitionID)
+				}
+				lastErr = fmt.Errorf("failed to load builds for %s/%s: %w", pipelineConfig.Project, pipelineIdentifier, err)
 				continue
 			}
 			allBuilds = append(allBuilds, builds...)
