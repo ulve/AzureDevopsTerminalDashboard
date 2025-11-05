@@ -265,47 +265,64 @@ type PRChangesResponse struct {
 
 // GetPRFiles fetches the list of changed files in a pull request
 func (c *Client) GetPRFiles(project, repository string, prID int) ([]string, error) {
-	// Get the latest iteration
-	iterURL := fmt.Sprintf("%s/%s/%s/_apis/git/repositories/%s/pullRequests/%d/iterations?api-version=%s",
+	// First, get PR details to get the source and target commits
+	prURL := fmt.Sprintf("%s/%s/%s/_apis/git/repositories/%s/pullRequests/%d?api-version=%s",
 		baseURL, c.organization, project, repository, prID, apiVersion)
 
-	body, err := c.doRequest(iterURL)
+	body, err := c.doRequest(prURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get PR iterations: %w", err)
+		return nil, fmt.Errorf("failed to get PR details: %w", err)
 	}
 
-	var iterResponse PRIterationsResponse
-	if err := json.Unmarshal(body, &iterResponse); err != nil {
-		return nil, fmt.Errorf("failed to parse iterations response: %w", err)
+	var pr struct {
+		LastMergeSourceCommit struct {
+			CommitID string `json:"commitId"`
+		} `json:"lastMergeSourceCommit"`
+		LastMergeTargetCommit struct {
+			CommitID string `json:"commitId"`
+		} `json:"lastMergeTargetCommit"`
 	}
 
-	if len(iterResponse.Value) == 0 {
-		return nil, fmt.Errorf("no iterations found for this PR - it may not have any commits yet")
+	if err := json.Unmarshal(body, &pr); err != nil {
+		return nil, fmt.Errorf("failed to parse PR details: %w", err)
 	}
 
-	latestIter := iterResponse.Value[len(iterResponse.Value)-1]
+	// Get the diff between target (base) and source (head) commits
+	diffsURL := fmt.Sprintf("%s/%s/%s/_apis/git/repositories/%s/diffs/commits?baseVersion=%s&targetVersion=%s&api-version=%s",
+		baseURL, c.organization, project, repository, pr.LastMergeTargetCommit.CommitID, pr.LastMergeSourceCommit.CommitID, apiVersion)
 
-	// Get changes for the latest iteration
-	changesURL := fmt.Sprintf("%s/%s/%s/_apis/git/repositories/%s/pullRequests/%d/iterations/%d/changes?api-version=%s",
-		baseURL, c.organization, project, repository, prID, latestIter.ID, apiVersion)
-
-	body, err = c.doRequest(changesURL)
+	body, err = c.doRequest(diffsURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get PR changes: %w", err)
+		return nil, fmt.Errorf("failed to get commit diffs: %w", err)
 	}
 
-	var changesResponse PRChangesResponse
-	if err := json.Unmarshal(body, &changesResponse); err != nil {
-		return nil, fmt.Errorf("failed to parse changes response: %w", err)
+	var diffsResponse struct {
+		Changes []struct {
+			Item struct {
+				Path string `json:"path"`
+			} `json:"item"`
+		} `json:"changes"`
 	}
 
-	if len(changesResponse.Changes) == 0 {
+	if err := json.Unmarshal(body, &diffsResponse); err != nil {
+		return nil, fmt.Errorf("failed to parse diffs response: %w", err)
+	}
+
+	if len(diffsResponse.Changes) == 0 {
 		return nil, fmt.Errorf("no file changes found in this PR")
 	}
 
-	files := make([]string, 0, len(changesResponse.Changes))
-	for _, change := range changesResponse.Changes {
-		files = append(files, change.Item.Path)
+	files := make([]string, 0, len(diffsResponse.Changes))
+	seenFiles := make(map[string]bool) // Deduplicate files
+	for _, change := range diffsResponse.Changes {
+		if change.Item.Path != "" && !seenFiles[change.Item.Path] {
+			files = append(files, change.Item.Path)
+			seenFiles[change.Item.Path] = true
+		}
+	}
+
+	if len(files) == 0 {
+		return nil, fmt.Errorf("no file changes found in this PR")
 	}
 
 	return files, nil
