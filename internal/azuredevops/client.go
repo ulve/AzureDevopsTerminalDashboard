@@ -377,35 +377,55 @@ func (c *Client) GetPRFileDiff(project, repository string, prID int, filePath st
 		result.WriteString("new file\n")
 		result.WriteString(fmt.Sprintf("--- /dev/null\n"))
 		result.WriteString(fmt.Sprintf("+++ b/%s\n", filePath))
+		// For new files, show all content as additions
+		lines := strings.Split(sourceText, "\n")
+		if len(lines) > 0 {
+			result.WriteString("@@ -0,0 +1," + fmt.Sprintf("%d", len(lines)) + " @@\n")
+			for _, line := range lines {
+				result.WriteString("+" + line + "\n")
+			}
+		}
 	} else if isDeletedFile {
 		result.WriteString("deleted file\n")
 		result.WriteString(fmt.Sprintf("--- a/%s\n", filePath))
 		result.WriteString(fmt.Sprintf("+++ /dev/null\n"))
+		// For deleted files, show all content as deletions
+		lines := strings.Split(targetText, "\n")
+		if len(lines) > 0 {
+			result.WriteString("@@ -1," + fmt.Sprintf("%d", len(lines)) + " +0,0 @@\n")
+			for _, line := range lines {
+				result.WriteString("-" + line + "\n")
+			}
+		}
 	} else {
 		result.WriteString(fmt.Sprintf("--- a/%s\n", filePath))
 		result.WriteString(fmt.Sprintf("+++ b/%s\n", filePath))
-	}
 
-	// Generate unified diff format
-	patches := dmp.PatchMake(targetText, diffs)
-	patchText := dmp.PatchToText(patches)
+		// Generate line-by-line diff manually
+		targetLines := strings.Split(targetText, "\n")
+		sourceLines := strings.Split(sourceText, "\n")
 
-	// If we have patches, include them
-	if patchText != "" {
-		result.WriteString(patchText)
-	} else if isNewFile {
-		// For new files, show all content as additions
-		lines := strings.Split(sourceText, "\n")
-		result.WriteString("@@ -0,0 +1," + fmt.Sprintf("%d", len(lines)) + " @@\n")
-		for _, line := range lines {
-			result.WriteString("+" + line + "\n")
-		}
-	} else if isDeletedFile {
-		// For deleted files, show all content as deletions
-		lines := strings.Split(targetText, "\n")
-		result.WriteString("@@ -1," + fmt.Sprintf("%d", len(lines)) + " +0,0 @@\n")
-		for _, line := range lines {
-			result.WriteString("-" + line + "\n")
+		// Simple line-by-line comparison
+		result.WriteString(fmt.Sprintf("@@ -1,%d +1,%d @@\n", len(targetLines), len(sourceLines)))
+
+		// Show the diff using the dmp library's results
+		for _, diff := range diffs {
+			lines := strings.Split(diff.Text, "\n")
+			for i, line := range lines {
+				// Skip empty last line from split
+				if i == len(lines)-1 && line == "" {
+					continue
+				}
+
+				switch diff.Type {
+				case diffmatchpatch.DiffInsert:
+					result.WriteString("+" + line + "\n")
+				case diffmatchpatch.DiffDelete:
+					result.WriteString("-" + line + "\n")
+				case diffmatchpatch.DiffEqual:
+					result.WriteString(" " + line + "\n")
+				}
+			}
 		}
 	}
 
