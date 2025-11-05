@@ -161,8 +161,11 @@ func (c *Client) GetBuilds(project, pipelineName string, definitionID int) ([]Bu
 		}
 	}
 
-	url := fmt.Sprintf("%s/%s/%s/_apis/build/builds?definitions=%d&statusFilter=all&$top=10&api-version=%s",
+	url := fmt.Sprintf("%s/%s/%s/_apis/build/builds?definitions=%d&statusFilter=all&queryOrder=queueTimeDescending&$top=10&api-version=%s",
 		baseURL, c.organization, project, definition.ID, apiVersion)
+
+	// Debug logging
+	fmt.Printf("DEBUG: Fetching builds from URL: %s\n", url)
 
 	body, err := c.doRequest(url)
 	if err != nil {
@@ -172,6 +175,13 @@ func (c *Client) GetBuilds(project, pipelineName string, definitionID int) ([]Bu
 	var response BuildsResponse
 	if err := json.Unmarshal(body, &response); err != nil {
 		return nil, fmt.Errorf("failed to parse builds response: %w", err)
+	}
+
+	// Debug logging
+	fmt.Printf("DEBUG: Received %d builds\n", len(response.Value))
+	for i, build := range response.Value {
+		fmt.Printf("DEBUG: Build %d - ID: %d, Status: %s, Result: %s, Number: %s\n",
+			i+1, build.ID, build.Status, build.Result, build.BuildNumber)
 	}
 
 	// Ensure all builds have the definition name populated
