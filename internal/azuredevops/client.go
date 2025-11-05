@@ -143,14 +143,14 @@ type BuildsResponse struct {
 
 // GetBuilds fetches recent builds for a pipeline
 func (c *Client) GetBuilds(project, pipelineName string) ([]Build, error) {
-	// First, we need to get the pipeline definition ID
-	definitionID, err := c.getPipelineDefinitionID(project, pipelineName)
+	// First, we need to get the pipeline definition (ID and Name)
+	definition, err := c.getPipelineDefinition(project, pipelineName)
 	if err != nil {
 		return nil, err
 	}
 
 	url := fmt.Sprintf("%s/%s/%s/_apis/build/builds?definitions=%d&$top=10&api-version=%s",
-		baseURL, c.organization, project, definitionID, apiVersion)
+		baseURL, c.organization, project, definition.ID, apiVersion)
 
 	body, err := c.doRequest(url)
 	if err != nil {
@@ -162,6 +162,17 @@ func (c *Client) GetBuilds(project, pipelineName string) ([]Build, error) {
 		return nil, fmt.Errorf("failed to parse builds response: %w", err)
 	}
 
+	// Ensure all builds have the definition name populated
+	// The API response may not include the full definition details
+	for i := range response.Value {
+		if response.Value[i].Definition.Name == "" {
+			response.Value[i].Definition.Name = definition.Name
+		}
+		if response.Value[i].Definition.ID == 0 {
+			response.Value[i].Definition.ID = definition.ID
+		}
+	}
+
 	return response.Value, nil
 }
 
@@ -171,26 +182,26 @@ type DefinitionsResponse struct {
 	Count int         `json:"count"`
 }
 
-// getPipelineDefinitionID gets the definition ID for a pipeline by name
-func (c *Client) getPipelineDefinitionID(project, pipelineName string) (int, error) {
+// getPipelineDefinition gets the pipeline definition (ID and Name) by name
+func (c *Client) getPipelineDefinition(project, pipelineName string) (Definition, error) {
 	url := fmt.Sprintf("%s/%s/%s/_apis/build/definitions?name=%s&api-version=%s",
 		baseURL, c.organization, project, pipelineName, apiVersion)
 
 	body, err := c.doRequest(url)
 	if err != nil {
-		return 0, err
+		return Definition{}, err
 	}
 
 	var response DefinitionsResponse
 	if err := json.Unmarshal(body, &response); err != nil {
-		return 0, fmt.Errorf("failed to parse definitions response: %w", err)
+		return Definition{}, fmt.Errorf("failed to parse definitions response: %w", err)
 	}
 
 	if len(response.Value) == 0 {
-		return 0, fmt.Errorf("pipeline '%s' not found in project '%s'", pipelineName, project)
+		return Definition{}, fmt.Errorf("pipeline '%s' not found in project '%s'", pipelineName, project)
 	}
 
-	return response.Value[0].ID, nil
+	return response.Value[0], nil
 }
 
 // PRIteration represents a pull request iteration

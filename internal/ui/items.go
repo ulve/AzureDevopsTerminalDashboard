@@ -52,7 +52,14 @@ func (i buildItem) Title() string {
 	}
 
 	statusIcon := getStatusIcon(status)
-	return fmt.Sprintf("%s Build #%s: %s", statusIcon, i.build.BuildNumber, i.build.Definition.Name)
+
+	// Use pipeline name if available, otherwise show the definition ID
+	pipelineName := i.build.Definition.Name
+	if pipelineName == "" {
+		pipelineName = fmt.Sprintf("Pipeline (ID: %d)", i.build.Definition.ID)
+	}
+
+	return fmt.Sprintf("%s Build #%s: %s", statusIcon, i.build.BuildNumber, pipelineName)
 }
 
 func (i buildItem) Description() string {
