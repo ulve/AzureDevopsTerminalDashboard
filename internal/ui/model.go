@@ -41,6 +41,7 @@ type Model struct {
 	currentDiff     string
 	buildLogs       string
 	loading         bool
+	loadingLogs     bool
 	err             error
 	lastUpdate      time.Time
 	autoRefresh     bool
@@ -160,7 +161,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			return m.handleEnter()
 
-		case "esc":
+		case "h", "left":
 			// Go back to previous view
 			switch m.view {
 			case ViewPRFiles:
@@ -208,6 +209,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case LogsLoadedMsg:
+		m.loadingLogs = false
 		if msg.err != nil {
 			m.err = msg.err
 		} else {
@@ -338,7 +340,7 @@ func (m Model) renderPRFiles() string {
 
 	s.WriteString(m.fileList.View())
 	s.WriteString("\n")
-	s.WriteString(statusStyle.Render("Press 'enter' to view diff, 'esc' to go back, 'q' to quit"))
+	s.WriteString(statusStyle.Render("Press 'enter' to view diff, 'h' or left arrow to go back, 'q' to quit"))
 
 	return s.String()
 }
@@ -351,7 +353,7 @@ func (m Model) renderFileDiff() string {
 	s.WriteString("\n\n")
 	s.WriteString(m.diffViewport.View())
 	s.WriteString("\n")
-	s.WriteString(statusStyle.Render("Press 'esc' to go back, 'q' to quit"))
+	s.WriteString(statusStyle.Render("Press 'h' or left arrow to go back, 'q' to quit"))
 
 	return s.String()
 }
@@ -365,9 +367,13 @@ func (m Model) renderBuildLogs() string {
 		s.WriteString("\n\n")
 	}
 
-	s.WriteString(m.logsViewport.View())
+	if m.loadingLogs {
+		s.WriteString("\n  Loading logs...\n")
+	} else {
+		s.WriteString(m.logsViewport.View())
+	}
 	s.WriteString("\n")
-	s.WriteString(statusStyle.Render("Press 'esc' to go back, 'q' to quit"))
+	s.WriteString(statusStyle.Render("Press 'h' or left arrow to go back, 'q' to quit"))
 
 	return s.String()
 }
@@ -388,6 +394,7 @@ func (m Model) handleEnter() (Model, tea.Cmd) {
 			idx := m.buildList.Index()
 			if idx >= 0 && idx < len(m.builds) {
 				m.selectedBuild = &m.builds[idx]
+				m.loadingLogs = true
 				return m, m.loadBuildLogs(m.selectedBuild)
 			}
 		}
