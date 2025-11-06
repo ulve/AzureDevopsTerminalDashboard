@@ -66,7 +66,7 @@ func (m Model) loadFileDiff(pr *azuredevops.PullRequest, filePath string) tea.Cm
 			return DiffLoadedMsg{err: fmt.Errorf("failed to load file diff: %w", err)}
 		}
 
-		return DiffLoadedMsg{diff: diff}
+		return DiffLoadedMsg{diff: diff, filePath: filePath}
 	}
 }
 

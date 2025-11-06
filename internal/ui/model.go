@@ -44,6 +44,7 @@ type Model struct {
 	selectedBuildProject string
 	prFiles         []string
 	currentDiff     string
+	currentFilePath string
 	buildLogs       string
 	loading         bool
 	loadingLogs     bool
@@ -74,8 +75,9 @@ type FilesLoadedMsg struct {
 
 // DiffLoadedMsg represents loaded file diff
 type DiffLoadedMsg struct {
-	diff string
-	err  error
+	diff     string
+	filePath string
+	err      error
 }
 
 // LogsLoadedMsg represents loaded build logs
@@ -239,8 +241,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.err = nil // Clear any previous errors
 			m.currentDiff = msg.diff
-			// Format diff with colors
-			coloredDiff := m.formatDiff(msg.diff)
+			m.currentFilePath = msg.filePath
+			// Format diff with colors and syntax highlighting
+			coloredDiff := m.formatDiff(msg.diff, msg.filePath)
 			m.diffViewport.SetContent(coloredDiff)
 			m.view = ViewFileDiff
 		}
@@ -685,10 +688,13 @@ func (m Model) clonePRRepo() tea.Cmd {
 	}
 }
 
-// formatDiff colorizes diff output with Lipgloss
-func (m Model) formatDiff(diff string) string {
+// formatDiff colorizes diff output with syntax highlighting
+func (m Model) formatDiff(diff, filePath string) string {
 	lines := strings.Split(diff, "\n")
 	var result strings.Builder
+
+	// Detect language from file path
+	language := detectLanguage(filePath)
 
 	// Define styles for different diff elements
 	addedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("46"))        // bright green
@@ -705,13 +711,31 @@ func (m Model) formatDiff(diff string) string {
 		switch {
 		case strings.HasPrefix(line, "+"):
 			if !strings.HasPrefix(line, "+++") {
-				result.WriteString(addedStyle.Render(line) + "\n")
+				// Apply syntax highlighting to added lines
+				if language != "" && len(line) > 1 {
+					// Get the code part (after the + prefix)
+					codePart := line[1:]
+					highlighted := highlightCode(codePart, language)
+					// Style the + prefix and append highlighted code
+					result.WriteString(addedStyle.Render("+") + highlighted + "\n")
+				} else {
+					result.WriteString(addedStyle.Render(line) + "\n")
+				}
 			} else {
 				result.WriteString(headerStyle.Render(line) + "\n")
 			}
 		case strings.HasPrefix(line, "-"):
 			if !strings.HasPrefix(line, "---") {
-				result.WriteString(deletedStyle.Render(line) + "\n")
+				// Apply syntax highlighting to deleted lines
+				if language != "" && len(line) > 1 {
+					// Get the code part (after the - prefix)
+					codePart := line[1:]
+					highlighted := highlightCode(codePart, language)
+					// Style the - prefix and append highlighted code
+					result.WriteString(deletedStyle.Render("-") + highlighted + "\n")
+				} else {
+					result.WriteString(deletedStyle.Render(line) + "\n")
+				}
 			} else {
 				result.WriteString(headerStyle.Render(line) + "\n")
 			}
@@ -722,7 +746,15 @@ func (m Model) formatDiff(diff string) string {
 		case strings.HasPrefix(line, "new file") || strings.HasPrefix(line, "deleted file"):
 			result.WriteString(hunkStyle.Render(line) + "\n")
 		default:
-			result.WriteString(line + "\n")
+			// Apply syntax highlighting to context lines (unchanged code)
+			if language != "" && len(line) > 0 && line[0] == ' ' {
+				// Get the code part (after the space prefix)
+				codePart := line[1:]
+				highlighted := highlightCode(codePart, language)
+				result.WriteString(" " + highlighted + "\n")
+			} else {
+				result.WriteString(line + "\n")
+			}
 		}
 	}
 
